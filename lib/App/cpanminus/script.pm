@@ -1394,6 +1394,9 @@ sub install_module {
 
     $self->diag("--> Working on $module\n");
 
+    # XXX profiling hack
+    $self->{_timing}{$dist}{pre_configure_start} = time;
+
     $dist->{dir} ||= $self->fetch_module($dist);
 
     unless ($dist->{dir}) {
@@ -2120,8 +2123,14 @@ sub build_stuff {
 
     my $target = $dist->{meta}{name} ? "$dist->{meta}{name}-$dist->{meta}{version}" : $dist->{dir};
 
+    # XXX profiling hack
+    $self->{_timing}{$dist}{pre_configure_end} = time;
+
     $self->install_deps_bailout($target, $dist->{dir}, $depth, @config_deps)
         or return;
+
+    # XXX profiling hack
+    $self->{_timing}{$dist}{configure_start} = time;
 
     $self->diag_progress("Configuring $target");
 
@@ -2156,6 +2165,9 @@ sub build_stuff {
         $walkup = $self->scandeps_append_child($dist);
     }
 
+    # XXX profiling hack
+    $self->{_timing}{$dist}{configure_end} = time;
+
     $self->install_deps_bailout($distname, $dist->{dir}, $depth, @deps)
         or return;
 
@@ -2187,17 +2199,29 @@ DIAG
 
     my $installed;
     if ($configure_state->{use_module_build} && -e 'Build' && -f _) {
+        # XXX profiling hack
+        $self->{_timing}{$dist}{build_start} = time;
+
         $self->diag_progress("Building " . ($self->{notest} ? "" : "and testing ") . $distname);
         $self->build([ $self->{perl}, "./Build" ], $distname, $depth) &&
         $self->test([ $self->{perl}, "./Build", "test" ], $distname, $depth) &&
         $self->install([ $self->{perl}, "./Build", "install" ], [ "--uninst", 1 ], $depth) &&
         $installed++;
+
+        # XXX profiling hack
+        $self->{_timing}{$dist}{build_end} = time;
     } elsif ($self->{make} && -e 'Makefile') {
+        # XXX profiling hack
+        $self->{_timing}{$dist}{build_start} = time;
+
         $self->diag_progress("Building " . ($self->{notest} ? "" : "and testing ") . $distname);
         $self->build([ $self->{make} ], $distname, $depth) &&
         $self->test([ $self->{make}, "test" ], $distname, $depth) &&
         $self->install([ $self->{make}, "install" ], [ "UNINST=1" ], $depth) &&
         $installed++;
+
+        # XXX profiling hack
+        $self->{_timing}{$dist}{build_end} = time;
     } else {
         my $why;
         my $configure_failed = $configure_state->{configured} && !$configure_state->{configured_ok};
@@ -2226,6 +2250,10 @@ DIAG
                 : $local     ? "installed $distname ($action from $local)"
                              : "installed $distname" ;
         my $msg = "Successfully $how";
+
+        # XXX profiling hack
+        my $time = $self->_total_time($dist);
+        $msg .= sprintf(" (%d secs)", int $time);
         $self->diag_ok;
         $self->diag("$msg\n", 1);
         $self->{installed_dists}++;
@@ -2236,6 +2264,16 @@ DIAG
         $self->diag_fail("$what $stuff failed. See $self->{log} for details. Retry with --force to force install it.", 1);
         return;
     }
+}
+
+sub _total_time {
+    my ($self, $dist) = @_;
+    my $timings = $self->{_timing}{$dist};
+    my $time = 0;
+    for my $phase( qw/pre_configure configure build/ ) {
+        $time += $timings->{"${phase}_end"} - $timings->{"${phase}_start"};
+    }
+    return $time;
 }
 
 sub perl_requirements {
